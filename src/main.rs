@@ -1,31 +1,10 @@
-#![feature(box_syntax)]
+#![feature(box_syntax, uniform_paths)]
+#![allow(unused_variables, dead_code)]
 
 mod app;
-use std::fs;
-use std::io;
+mod lib;
+use lib::*;
 use std::path::Path;
-
-fn create_path(p: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(&p)
-}
-
-fn visit_dirs(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir)?.filter(|s| match s {
-            Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
-            _ => false,
-        }) {
-            let entry = entry?;
-            let path = entry.path();
-            let meta = entry.metadata()?;
-            if path.is_dir() {
-                visit_dirs(&path)?;
-            }
-            println!("{:?}", path);
-        }
-    }
-    Ok(())
-}
 
 fn main() -> std::io::Result<()> {
     // let matches = app::build().get_matches();
