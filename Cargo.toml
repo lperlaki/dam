@@ -7,3 +7,7 @@ edition = "2018"
 [dependencies]
 clap = "2.32.0"
 checksum = "0.2.1"
+leveldb = "0.8"
+serde = { version = "1.0.87", features = ["derive"] }
+serde_json = "1.0.38"
+rexif = "0.3.5"
