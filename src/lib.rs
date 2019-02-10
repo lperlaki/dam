@@ -1,22 +1,57 @@
 use checksum::crc::Crc;
-use leveldb::database::error::Error;
-use leveldb::database::Database;
-use leveldb::kv::KV;
-use leveldb::options::{Options, WriteOptions};
+use rustbreak::backend::FileBackend;
+use rustbreak::deser::Bincode;
+use rustbreak::Database;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
+pub struct Error;
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("Error")
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        "Error"
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(_e: std::io::Error) -> Self {
+        Error
+    }
+}
+
+impl From<rustbreak::error::RustbreakError> for Error {
+    fn from(_e: rustbreak::error::RustbreakError) -> Self {
+        Error
+    }
+}
+
+impl From<&str> for Error {
+    fn from(_e: &str) -> Self {
+        Error
+    }
+}
+
+pub type Store = Database<HashMap<u64, Info>, FileBackend, Bincode>;
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Info {
     name: String,
-    checksum: i32,
+    checksum: u64,
     path: PathBuf,
 }
 
 impl Info {
-    fn from_entry(entry: fs::DirEntry) -> io::Result<Info> {
+    fn from_entry(entry: fs::DirEntry) -> Result<Info> {
         let path = entry.path();
         Ok(Info {
             name: match entry.file_name().into_string() {
@@ -27,59 +62,41 @@ impl Info {
             path: path,
         })
     }
-    fn save(&self, db: &Database<i32>) -> Result<(), Error> {
-        let write_opts = WriteOptions::new();
-        db.put(
-            write_opts,
-            &self.checksum,
-            serde_json::to_vec(&self).unwrap().as_ref(),
-        )
-    }
-    pub fn from_bytes(bytes: &[u8]) -> io::Result<Info> {
-        match serde_json::from_slice(bytes) {
-            Ok(val) => Ok(val),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-        }
+    fn save(self, db: &Store) -> Result<()> {
+        db.write(|db| db.insert(self.checksum, self))?;
+        db.save().map_err(Error::from)
     }
 }
 
 trait Information {
-    fn checksum(&self) -> io::Result<i32>;
-    fn metadata(&self) -> io::Result<fs::Metadata>;
+    fn checksum(&self) -> Result<u64>;
+    fn metadata(&self) -> Result<fs::Metadata>;
 }
 
 impl Information for Path {
-    fn checksum(&self) -> io::Result<i32> {
-        if let Some(filename) = self.to_str() {
-            let mut crc = Crc::new(filename);
-            return match crc.checksum() {
-                Ok(checksum) => Ok(checksum.crc32 as i32),
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-            };
+    fn checksum(&self) -> Result<u64> {
+        match self.to_str() {
+            Some(filename) => Ok(Crc::new(filename).checksum()?.crc64),
+            None => Err(Error),
         }
-        Err(io::Error::new(io::ErrorKind::Other, "No Valid Path"))
     }
-    fn metadata(&self) -> io::Result<fs::Metadata> {
-        fs::metadata(self)
-    }
-}
-
-pub fn create_path(p: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(&p)
-}
-
-pub fn create_dir_db(dir: &Path) -> Database<i32> {
-    let dir = dir.join(".db");
-    let path = dir.as_path();
-    let mut options = Options::new();
-    options.create_if_missing = true;
-    match Database::<i32>::open(path, options) {
-        Ok(db) => db,
-        Err(e) => panic!("failed to open database: {:?}", e),
+    fn metadata(&self) -> Result<fs::Metadata> {
+        fs::metadata(self).map_err(Error::from)
     }
 }
 
-pub fn visit_dirs(dir: &Path, db: &Database<i32>) -> io::Result<()> {
+pub fn create_path(p: &Path) -> Result<()> {
+    fs::create_dir_all(&p).map_err(Error::from)
+}
+
+pub fn create_dir_db(dir: &Path) -> rustbreak::error::Result<Store> {
+    let dir = dir.join(".dam.db");
+    let db = Store::from_path(dir.as_path(), HashMap::new())?;
+    db.load()?;
+    Ok(db)
+}
+
+pub fn visit_dirs(dir: &Path, db: &Store) -> Result<()> {
     if dir.is_dir() {
         for entry in fs::read_dir(dir)?.filter(|s| match s {
             Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
