@@ -1,3 +1,5 @@
+#![feature(try_trait)]
+
 use checksum::crc::Crc;
 use rustbreak::backend::FileBackend;
 use rustbreak::deser::Bincode;
@@ -40,31 +42,53 @@ impl From<&str> for Error {
     }
 }
 
-pub type Store = Database<HashMap<u64, Info>, FileBackend, Bincode>;
+impl From<std::option::NoneError> for Error {
+    fn from(_e: std::option::NoneError) -> Self {
+        Error
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub type Store = Database<HashMap<u64, Entry>, FileBackend, Bincode>;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Info {
+pub struct Entry {
+    id: u64,
     name: String,
-    checksum: u64,
     path: PathBuf,
 }
 
-impl Info {
-    fn from_entry(entry: fs::DirEntry) -> Result<Info> {
+impl Entry {
+    fn from_entry(entry: fs::DirEntry) -> Result<Entry> {
         let path = entry.path();
-        Ok(Info {
+        Ok(Entry {
+            id: path.checksum()?,
             name: match entry.file_name().into_string() {
                 Ok(s) => s,
                 Err(_) => String::new(),
             },
-            checksum: path.checksum()?,
             path: path,
         })
     }
-    fn save(self, db: &Store) -> Result<()> {
-        db.write(|db| db.insert(self.checksum, self))?;
+    pub fn save(self, db: &Store) -> Result<()> {
+        db.write(|db| db.insert(self.id, self))?;
         db.save().map_err(Error::from)
+    }
+    // pub fn load(id: u64, db: &Store) -> Result<Option<Entry>> {
+    //     db.write(|db| match db.entry(id) {
+    //         std::collections::hash_map::Entry::Occupied(v) => Some(*v.get()),
+    //         std::collections::hash_map::Entry::Vacant(_) => None,
+    //     }).map_err(Error::from)
+    // }
+    // pub fn load<'a>(id: &'a u64, db: &Store) -> Result<&'a Entry> {
+    //     db.read(|db| db.get(id).unwrap()).map_err(Error::from)
+    // }
+    pub fn rename(&mut self, dest: &Path) -> Result<()> {
+        create_path(dest.parent()?)?;
+        fs::rename(&self.path, dest)?;
+        self.path = dest.to_path_buf();
+        Ok(())
     }
 }
 
@@ -92,8 +116,7 @@ pub fn create_path(p: &Path) -> Result<()> {
 pub fn create_dir_db(dir: &Path) -> rustbreak::error::Result<Store> {
     let dir = dir.join(".dam.db");
     let db = Store::from_path(dir.as_path(), HashMap::new())?;
-    db.load()?;
-    Ok(db)
+    db.load().or_else(|_| db.save()).and(Ok(db))
 }
 
 pub fn visit_dirs(dir: &Path, db: &Store) -> Result<()> {
@@ -105,7 +128,7 @@ pub fn visit_dirs(dir: &Path, db: &Store) -> Result<()> {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() {
-                let info = Info::from_entry(entry)?;
+                let info = Entry::from_entry(entry)?;
                 match info.save(&db) {
                     Ok(_) => (),
                     Err(e) => panic!("failed to write to database: {:?}", e),
