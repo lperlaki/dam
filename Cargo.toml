@@ -1,10 +1,12 @@
 [package]
 name = "dam"
+edition = "2018"
 version = "0.1.0"
 authors = ["Liam Perlaki <lperlaki@icloud.com>"]
-edition = "2018"
+repository = "https://github.com/lperlaki/dam"
 description = "Digital Asset Manager"
 license = "MIT"
+readme = "./README.md"
 
 [dependencies]
 clap = "2.32.0"
