@@ -1,6 +1,7 @@
 #![feature(try_trait)]
 
 use checksum::crc::Crc;
+use rexif::ExifData;
 use rustbreak::backend::FileBackend;
 use rustbreak::deser::Bincode;
 use rustbreak::Database;
@@ -36,6 +37,12 @@ impl From<rustbreak::error::RustbreakError> for Error {
     }
 }
 
+impl From<rexif::ExifError> for Error {
+    fn from(_e: rexif::ExifError) -> Self {
+        Error
+    }
+}
+
 impl From<&str> for Error {
     fn from(_e: &str) -> Self {
         Error
@@ -57,6 +64,7 @@ pub struct Entry {
     id: u64,
     name: String,
     path: PathBuf,
+    exif: HashMap<String, String>,
 }
 
 impl Entry {
@@ -69,6 +77,7 @@ impl Entry {
                 Err(_) => String::new(),
             },
             path: path,
+            exif: path.exif()?.entries.iter().map(|entry| (*entry.tag_readable, *entry.value_readable)).collect()
         })
     }
     pub fn save(self, db: &Store) -> Result<()> {
@@ -95,6 +104,7 @@ impl Entry {
 trait Information {
     fn checksum(&self) -> Result<u64>;
     fn metadata(&self) -> Result<fs::Metadata>;
+    fn exif(&self) -> Result<ExifData>;
 }
 
 impl Information for Path {
@@ -106,6 +116,9 @@ impl Information for Path {
     }
     fn metadata(&self) -> Result<fs::Metadata> {
         fs::metadata(self).map_err(Error::from)
+    }
+    fn exif(&self) -> Result<ExifData> {
+        rexif::parse_file(self.to_str()?).map_err(Error::from)
     }
 }
 
