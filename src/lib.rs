@@ -64,7 +64,7 @@ pub struct Entry {
     id: u64,
     name: String,
     path: PathBuf,
-    exif: HashMap<String, String>,
+    // exif: HashMap<String, String>,
 }
 
 impl Entry {
@@ -77,7 +77,7 @@ impl Entry {
                 Err(_) => String::new(),
             },
             path: path,
-            exif: path.exif()?.entries.iter().map(|entry| (*entry.tag_readable, *entry.value_readable)).collect()
+            // exif: path.exif()?.entries.iter().map(|entry| (*entry.tag_readable, *entry.value_readable)).collect()
         })
     }
     pub fn save(self, db: &Store) -> Result<()> {
