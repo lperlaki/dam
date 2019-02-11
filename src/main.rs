@@ -6,12 +6,16 @@ use dam::*;
 
 use std::path::Path;
 
-
-
 fn main() -> Result<()> {
     let matches = app::build().get_matches();
     let path = Path::new(matches.value_of("INPUT")?);
     let database = create_dir_db(path)?;
-    visit_dirs(&path, &database)?;
+    // visit_dirs(&path, &database)?;
+    database.read(|db| {
+        println!(
+            "{:?}",
+            db.get(&1983737731663609691).unwrap().path.as_path().exif()
+        )
+    })?;
     Ok(())
 }

@@ -63,8 +63,8 @@ pub type Store = Database<HashMap<u64, Entry>, FileBackend, Bincode>;
 pub struct Entry {
     id: u64,
     name: String,
-    path: PathBuf,
-    // exif: HashMap<String, String>,
+    pub path: PathBuf,
+    exif: HashMap<String, String>,
 }
 
 impl Entry {
@@ -76,8 +76,14 @@ impl Entry {
                 Ok(s) => s,
                 Err(_) => String::new(),
             },
+            exif: path
+                .clone()
+                .exif()?
+                .entries
+                .iter()
+                .map(|entry| (entry.clone().unit, entry.clone().value_more_readable))
+                .collect(),
             path: path,
-            // exif: path.exif()?.entries.iter().map(|entry| (*entry.tag_readable, *entry.value_readable)).collect()
         })
     }
     pub fn save(self, db: &Store) -> Result<()> {
@@ -101,7 +107,7 @@ impl Entry {
     }
 }
 
-trait Information {
+pub trait Information {
     fn checksum(&self) -> Result<u64>;
     fn metadata(&self) -> Result<fs::Metadata>;
     fn exif(&self) -> Result<ExifData>;
