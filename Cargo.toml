@@ -3,6 +3,8 @@ name = "dam"
 version = "0.1.0"
 authors = ["Liam Perlaki <lperlaki@icloud.com>"]
 edition = "2018"
+description = "Digital Asset Manager"
+license = "MIT"
 
 [dependencies]
 clap = "2.32.0"

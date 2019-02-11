@@ -1,9 +1,9 @@
-# Digital Assets Manager
+# Digital Asset Manager
 
 > WIP
 
-A Comandline manager for all you media Files.
+A Comandline manager for all your media Files.
 
-```dam <my-folder>```
+`dam <my-folder>`
 
 To recursivly index to folder.
