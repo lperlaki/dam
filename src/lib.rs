@@ -113,10 +113,13 @@ pub fn create_path(p: &Path) -> Result<()> {
     fs::create_dir_all(&p).map_err(Error::from)
 }
 
-pub fn create_dir_db(dir: &Path) -> rustbreak::error::Result<Store> {
+pub fn create_dir_db(dir: &Path) -> Result<Store> {
     let dir = dir.join(".dam.db");
     let db = Store::from_path(dir.as_path(), HashMap::new())?;
-    db.load().or_else(|_| db.save()).and(Ok(db))
+    db.load()
+        .or_else(|_| db.save())
+        .and(Ok(db))
+        .map_err(Error::from)
 }
 
 pub fn visit_dirs(dir: &Path, db: &Store) -> Result<()> {
