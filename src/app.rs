@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 pub fn build() -> App<'static, 'static> {
     App::new("Open DAM")
-        .version("0.1.0")
+        .version("0.1.1")
         .author("Liam P. <lperlaki@icloud.com>")
         .about("Digital Asset Manager")
         .arg(
