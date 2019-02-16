@@ -1,16 +1,21 @@
-use clap::{App, Arg, SubCommand};
+use clap::{App, AppSettings, Arg, SubCommand};
 use std::path::PathBuf;
 
 pub fn build() -> App<'static, 'static> {
     App::new("Open DAM")
-        .version("0.1.1")
+        .version(env!("CARGO_PKG_VERSION"))
+        .setting(AppSettings::VersionlessSubcommands)
+        .setting(AppSettings::SubcommandRequiredElseHelp)
         .author("Liam P. <lperlaki@icloud.com>")
         .about("Digital Asset Manager")
         .arg(
-            Arg::with_name("INPUT")
-                .help("Sets the input file to use")
-                .required(true)
-                .default_value(".")
+            Arg::with_name("DIR")
+                .short("d")
+                .long("dir")
+                .help("Sets the DAM home dir")
+                .global(true)
+                .takes_value(true)
+                .default_value_os(std::path::Component::CurDir.as_os_str())
                 .validator(|val| {
                     let path = PathBuf::from(val);
                     if path.exists() && path.is_dir() {
@@ -18,7 +23,9 @@ pub fn build() -> App<'static, 'static> {
                     } else {
                         Err(String::from("Must be a valid directory!"))
                     }
-                })
-                .index(1),
+                }),
         )
+        .subcommand(SubCommand::with_name("init").about("init folder as dam"))
+        .subcommand(SubCommand::with_name("list").about("list all files"))
+        .subcommand(SubCommand::with_name("scan").about("scan for new"))
 }
