@@ -1,83 +1,25 @@
-#![feature(try_trait)]
+#![feature(try_trait, uniform_paths)]
 
 use checksum::crc::Crc;
+use chrono::{DateTime, Local};
 use rexif::ExifData;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row, NO_PARAMS};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug)]
-pub struct Error {
-    message: String,
-}
-
-impl Error {
-    pub fn new(s: &str) -> Self {
-        Error {
-            message: String::from(s),
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        "Error"
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(_e: std::io::Error) -> Self {
-        Error::new("IO Error")
-    }
-}
-
-impl From<rusqlite::Error> for Error {
-    fn from(_e: rusqlite::Error) -> Self {
-        Error::new("Rusqlite Error")
-    }
-}
-
-impl From<rexif::ExifError> for Error {
-    fn from(_e: rexif::ExifError) -> Self {
-        Error::new("Exif Error")
-    }
-}
-
-impl From<&str> for Error {
-    fn from(_e: &str) -> Self {
-        Error::new(_e)
-    }
-}
-
-impl From<std::ffi::OsString> for Error {
-    fn from(_e: std::ffi::OsString) -> Self {
-        Error::new("OS String Error")
-    }
-}
-
-impl From<std::option::NoneError> for Error {
-    fn from(_e: std::option::NoneError) -> Self {
-        Error::new("None Error")
-    }
-}
-
+mod error;
+pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 type EntryId = u32;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug)]
 pub struct Entry {
     id: EntryId,
     name: String,
-    pub path: PathBuf,
+    path: PathBuf,
+    created: DateTime<Local>,
 }
 
 impl Entry {
@@ -87,18 +29,20 @@ impl Entry {
             id: path.checksum()?,
             name: entry.file_name().into_string()?,
             path: path,
+            created: DateTime::from(entry.metadata()?.created()?),
         })
     }
     pub fn save(self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT INTO entry (id, name, path)
-                  VALUES (?1, ?2, ?3) 
+            "INSERT INTO entry (id, name, path, created)
+                  VALUES (?1, ?2, ?3, ?4) 
                   ON CONFLICT(id) 
-                  DO UPDATE SET name=?2, path=?3",
+                  DO UPDATE SET name=?2, path=?3, created=?4",
             &[
                 &self.id,
                 &self.name as &ToSql,
                 &self.path.to_str() as &ToSql,
+                &self.created as &ToSql,
             ],
         )?;
         Ok(())
@@ -108,6 +52,7 @@ impl Entry {
             id: row.get(0),
             name: row.get(1),
             path: PathBuf::from(row.get::<usize, String>(2)),
+            created: row.get::<usize, DateTime<Local>>(3),
         }
     }
     pub fn rename(&mut self, dest: &Path) -> Result<()> {
@@ -139,27 +84,28 @@ impl Information for Path {
     }
 }
 
-pub fn create_path(p: &Path) -> Result<()> {
+fn create_path(p: &Path) -> Result<()> {
     fs::create_dir_all(&p).map_err(Error::from)
 }
 
-pub fn create_dir_db(path: &PathBuf) -> Result<Connection> {
+fn create_dir_db(path: &PathBuf) -> Result<Connection> {
     Connection::open(db_path(path)).map_err(Error::from)
 }
 
-pub fn init_tables(conn: &Connection) -> Result<usize> {
+fn init_tables(conn: &Connection) -> Result<usize> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS entry (
                   id              INTEGER PRIMARY KEY,
                   name            TEXT NOT NULL,
-                  path            TEXT NOT NULL
+                  path            TEXT NOT NULL,
+                  created         DATETIME
                 )",
         NO_PARAMS,
     )
     .map_err(Error::from)
 }
 
-pub fn visit_dirs(dir: &Path, conn: &Connection) -> Result<()> {
+fn visit_dirs(dir: &Path, conn: &Connection) -> Result<()> {
     if dir.is_dir() {
         for entry in fs::read_dir(dir)?.filter(|s| match s {
             Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
@@ -182,6 +128,9 @@ pub fn visit_dirs(dir: &Path, conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn sort(entry: &Entry) -> Result<()> {
+    Ok(())
+}
 #[derive(Debug)]
 pub struct Dam {
     path: PathBuf,
@@ -195,7 +144,7 @@ pub enum DamStatus {
 }
 
 fn db_path(path: &PathBuf) -> PathBuf {
-    path.join(".dam.db")
+    path.join(".dam")
 }
 
 impl Dam {
@@ -223,7 +172,7 @@ impl Dam {
     pub fn list(&self) -> Result<()> {
         let mut stmt = self
             .connection
-            .prepare("SELECT id, name, path FROM entry")?;
+            .prepare("SELECT id, name, path, created FROM entry")?;
         let entry_iter = stmt.query_map(NO_PARAMS, |row| Entry::load(row))?;
 
         for entry in entry_iter {
