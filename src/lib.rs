@@ -1,13 +1,12 @@
 #![feature(try_trait, uniform_paths)]
 
 use checksum::crc::Crc;
-use chrono::{DateTime, Datelike, Local};
+use chrono::{DateTime, Local};
 use rexif::ExifData;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row, NO_PARAMS};
 use std::fs;
 use std::path::{Path, PathBuf};
-
 mod error;
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -23,7 +22,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn from_entry(entry: fs::DirEntry) -> Result<Entry> {
+    fn from_entry(entry: fs::DirEntry) -> Result<Self> {
         let path = entry.path();
         Ok(Entry {
             id: path.checksum()?,
@@ -33,18 +32,18 @@ impl Entry {
         })
     }
     pub fn save(self, conn: &Connection) -> Result<()> {
-        conn.execute(
+        let mut stmt = conn.prepare_cached(
             "INSERT INTO entry (id, name, path, created)
                   VALUES (?1, ?2, ?3, ?4) 
-                  ON CONFLICT(id) 
+                  ON CONFLICT (id) 
                   DO UPDATE SET name=?2, path=?3, created=?4",
-            &[
-                &self.id,
-                &self.name as &ToSql,
-                &self.path.to_str() as &ToSql,
-                &self.created as &ToSql,
-            ],
         )?;
+        stmt.execute(&[
+            &self.id,
+            &self.name as &ToSql,
+            &self.path.to_str() as &ToSql,
+            &self.created as &ToSql,
+        ])?;
         Ok(())
     }
     pub fn load(row: &Row) -> Entry {
@@ -60,6 +59,15 @@ impl Entry {
         fs::rename(&self.path, dest)?;
         self.path = dest.to_path_buf();
         Ok(())
+    }
+    pub fn open(&self) -> Result<std::process::ExitStatus> {
+        open::that(&self.path).map_err(Error::from)
+    }
+    pub fn find(conn: &Connection, name: &str) -> Result<Self> {
+        let mut stmt =
+            conn.prepare("SELECT id, name, path, created FROM entry WHERE name LIKE ?")?;
+        stmt.query_row(&[format!("%{}%", name)], |row| Entry::load(row))
+            .map_err(Error::from)
     }
 }
 
@@ -172,16 +180,17 @@ impl Dam {
                 if path.is_file() {
                     let mut info = Entry::from_entry(entry)?;
                     &self.sort(&mut info)?;
-                    match info.save(&self.connection) {
-                        Ok(_) => (),
-                        Err(e) => panic!("failed to write to database: {:?}", e),
-                    };
+                    info.save(&self.connection)?;
                 }
                 if path.is_dir() {
                     &self.visit_dirs(&path)?;
                 }
             }
         }
+        Ok(())
+    }
+    pub fn open(&self, name: &str) -> Result<()> {
+        Entry::find(&self.connection, name)?.open()?;
         Ok(())
     }
 }

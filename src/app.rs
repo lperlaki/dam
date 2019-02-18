@@ -28,4 +28,9 @@ pub fn build() -> App<'static, 'static> {
         .subcommand(SubCommand::with_name("init").about("init folder as dam"))
         .subcommand(SubCommand::with_name("list").about("list all files"))
         .subcommand(SubCommand::with_name("scan").about("scan for new"))
+        .subcommand(
+            SubCommand::with_name("open")
+                .about("open for new")
+                .arg(Arg::with_name("NAME").required(true)),
+        )
 }

@@ -32,6 +32,12 @@ fn main() -> Result<()> {
                 DamStatus::Empty(path) => println!("Please run dam init"),
             };
         }
+        ("open", Some(matches)) => {
+            match Dam::check_path(matches.value_of("DIR")?) {
+                DamStatus::Exists(dam) => dam.open(matches.value_of("NAME")?)?,
+                DamStatus::Empty(path) => println!("Please run dam init"),
+            };
+        }
         _ => println!("other"),
     }
     Ok(())
