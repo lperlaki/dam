@@ -2,14 +2,34 @@
 
 use checksum::crc::Crc;
 use chrono::{DateTime, Local};
+use image::{DynamicImage, GenericImageView};
 use rexif::ExifData;
 use rusqlite::types::ToSql;
-use rusqlite::{Connection, Row, NO_PARAMS};
+use rusqlite::{blob::ZeroBlob, Connection, DatabaseName, Row, NO_PARAMS};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 mod error;
 pub use error::Error;
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub trait Information {
+    fn checksum(&self) -> Result<EntryId>;
+    fn exif(&self) -> Result<ExifData>;
+}
+
+impl Information for Path {
+    fn checksum(&self) -> Result<EntryId> {
+        match self.to_str() {
+            Some(filename) => Ok(Crc::new(filename).checksum()?.crc32),
+            None => Err(Error::new("")),
+        }
+    }
+    fn exif(&self) -> Result<ExifData> {
+        rexif::parse_file(self.to_str()?).map_err(Error::from)
+    }
+}
 
 type EntryId = u32;
 
@@ -32,21 +52,36 @@ impl Entry {
         })
     }
     pub fn save(self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO entry (id, name, path, created)
-                  VALUES (?1, ?2, ?3, ?4) 
+        // TODO: Check if File is thumbnail Compatible
+
+        let thumb = self.thumbnail()?;
+
+        let pix = thumb.raw_pixels();
+        conn.prepare_cached(
+            "INSERT INTO entry (id, name, path, created, thumbnail)
+                  VALUES (?1, ?2, ?3, ?4, ?5) 
                   ON CONFLICT (id) 
                   DO UPDATE SET name=?2, path=?3, created=?4",
-        )?;
-        stmt.execute(&[
+        )?
+        .execute(&[
             &self.id,
             &self.name as &ToSql,
             &self.path.to_str() as &ToSql,
             &self.created as &ToSql,
+            &ZeroBlob(pix.len() as i32), // TODO: Fix Size (to big)
         ])?;
-        Ok(())
+        let mut blob = conn.blob_open(
+            DatabaseName::Main,
+            "entry",
+            "thumbnail",
+            conn.last_insert_rowid(),
+            false,
+        )?;
+        image::jpeg::JPEGEncoder::new(&mut blob)
+            .encode(&pix, thumb.width(), thumb.height(), thumb.color())
+            .map_err(Error::from)
     }
-    pub fn load(row: &Row) -> Entry {
+    pub fn load(row: &Row) -> Self {
         Entry {
             id: row.get(0),
             name: row.get(1),
@@ -64,36 +99,28 @@ impl Entry {
         open::that(&self.path).map_err(Error::from)
     }
     pub fn find(conn: &Connection, name: &str) -> Result<Self> {
-        let mut stmt =
-            conn.prepare("SELECT id, name, path, created FROM entry WHERE name LIKE ?")?;
-        stmt.query_row(&[format!("%{}%", name)], |row| Entry::load(row))
+        conn.prepare("SELECT id, name, path, created FROM entry WHERE name LIKE ?")?
+            .query_row(&[format!("%{}%", name)], |row| Entry::load(row))
             .map_err(Error::from)
     }
-}
-
-pub trait Information {
-    fn checksum(&self) -> Result<EntryId>;
-    fn metadata(&self) -> Result<fs::Metadata>;
-    fn exif(&self) -> Result<ExifData>;
-}
-
-impl Information for Path {
-    fn checksum(&self) -> Result<EntryId> {
-        match self.to_str() {
-            Some(filename) => Ok(Crc::new(filename).checksum()?.crc32),
-            None => Err(Error::new("")),
-        }
-    }
-    fn metadata(&self) -> Result<fs::Metadata> {
-        fs::metadata(self).map_err(Error::from)
-    }
-    fn exif(&self) -> Result<ExifData> {
-        rexif::parse_file(self.to_str()?).map_err(Error::from)
+    pub fn thumbnail(&self) -> Result<DynamicImage> {
+        Ok(image::open(&self.path)?.thumbnail(600, 400))
     }
 }
 
 fn create_path(p: &Path) -> Result<()> {
     fs::create_dir_all(&p).map_err(Error::from)
+}
+
+fn clear_dir(p: &Path) -> Result<()> {
+    match fs::remove_dir(p) {
+        Ok(_) => Ok(()),
+        Err(_) => Ok(()),
+    }
+}
+
+fn db_path(path: &PathBuf) -> PathBuf {
+    path.join(".dam")
 }
 
 fn create_dir_db(path: &PathBuf) -> Result<Connection> {
@@ -116,19 +143,15 @@ fn init_tables(conn: &Connection) -> Result<usize> {
 }
 
 #[derive(Debug)]
-pub struct Dam {
-    path: PathBuf,
-    connection: Connection,
-}
-
-#[derive(Debug)]
 pub enum DamStatus {
     Empty(PathBuf),
     Exists(Dam),
 }
 
-fn db_path(path: &PathBuf) -> PathBuf {
-    path.join(".dam")
+#[derive(Debug)]
+pub struct Dam {
+    path: PathBuf,
+    connection: Connection,
 }
 
 impl Dam {
@@ -157,11 +180,15 @@ impl Dam {
         let mut stmt = self
             .connection
             .prepare("SELECT id, name, path, created FROM entry")?;
-        let entry_iter = stmt.query_map(NO_PARAMS, |row| Entry::load(row))?;
 
-        for entry in entry_iter {
+        for entry in stmt.query_map(NO_PARAMS, |row| Entry::load(row))? {
             println!("{:?}", entry?);
         }
+        Ok(())
+    }
+
+    pub fn open(&self, name: &str) -> Result<()> {
+        Entry::find(&self.connection, name)?.open()?;
         Ok(())
     }
 
@@ -169,7 +196,8 @@ impl Dam {
         let mut path = PathBuf::from(&self.path);
         path.push(&entry.created.format("%G/%b_%d").to_string());
         path.push(&entry.name);
-        entry.rename(&path)
+        entry.rename(&path)?;
+        clear_dir(entry.path.parent()?)
     }
     fn visit_dirs(&self, dir: &Path) -> Result<()> {
         if dir.is_dir() {
@@ -189,10 +217,6 @@ impl Dam {
                 }
             }
         }
-        Ok(())
-    }
-    pub fn open(&self, name: &str) -> Result<()> {
-        Entry::find(&self.connection, name)?.open()?;
         Ok(())
     }
 }

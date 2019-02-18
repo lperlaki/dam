@@ -41,6 +41,12 @@ impl From<rexif::ExifError> for Error {
     }
 }
 
+impl From<image::ImageError> for Error {
+    fn from(_e: image::ImageError) -> Self {
+        Error::new("Image Error")
+    }
+}
+
 impl From<&str> for Error {
     fn from(_e: &str) -> Self {
         Error::new(_e)
