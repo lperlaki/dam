@@ -106,7 +106,9 @@ fn init_tables(conn: &Connection) -> Result<usize> {
                   id              INTEGER PRIMARY KEY,
                   name            TEXT NOT NULL,
                   path            TEXT NOT NULL,
-                  created         DATETIME
+                  created         DATETIME,
+                  thumbnail       BLOB,
+                  type            TEXT
                 )",
         NO_PARAMS,
     )
