@@ -1,7 +1,7 @@
 #![feature(try_trait, uniform_paths)]
 
 use checksum::crc::Crc;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local};
 use rexif::ExifData;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row, NO_PARAMS};
@@ -105,32 +105,6 @@ fn init_tables(conn: &Connection) -> Result<usize> {
     .map_err(Error::from)
 }
 
-fn visit_dirs(dir: &Path, conn: &Connection) -> Result<()> {
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir)?.filter(|s| match s {
-            Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
-            _ => false,
-        }) {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let info = Entry::from_entry(entry)?;
-                match info.save(&conn) {
-                    Ok(_) => (),
-                    Err(e) => panic!("failed to write to database: {:?}", e),
-                };
-            }
-            if path.is_dir() {
-                visit_dirs(&path, &conn)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn sort(entry: &Entry) -> Result<()> {
-    Ok(())
-}
 #[derive(Debug)]
 pub struct Dam {
     path: PathBuf,
@@ -166,7 +140,7 @@ impl Dam {
     }
 
     pub fn scan(&self) -> Result<()> {
-        visit_dirs(&self.path, &self.connection)
+        self.visit_dirs(&self.path)
     }
 
     pub fn list(&self) -> Result<()> {
@@ -177,6 +151,36 @@ impl Dam {
 
         for entry in entry_iter {
             println!("{:?}", entry?);
+        }
+        Ok(())
+    }
+
+    fn sort(&self, entry: &mut Entry) -> Result<()> {
+        let mut path = PathBuf::from(&self.path);
+        path.push(&entry.created.format("%G/%b_%d").to_string());
+        path.push(&entry.name);
+        entry.rename(&path)
+    }
+    fn visit_dirs(&self, dir: &Path) -> Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)?.filter(|s| match s {
+                Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
+                _ => false,
+            }) {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let mut info = Entry::from_entry(entry)?;
+                    &self.sort(&mut info)?;
+                    match info.save(&self.connection) {
+                        Ok(_) => (),
+                        Err(e) => panic!("failed to write to database: {:?}", e),
+                    };
+                }
+                if path.is_dir() {
+                    &self.visit_dirs(&path)?;
+                }
+            }
         }
         Ok(())
     }
