@@ -47,6 +47,18 @@ impl From<image::ImageError> for Error {
     }
 }
 
+impl From<glob::GlobError> for Error {
+    fn from(_e: glob::GlobError) -> Self {
+        Error::new("Glob Error")
+    }
+}
+
+impl From<glob::PatternError> for Error {
+    fn from(_e: glob::PatternError) -> Self {
+        Error::new("Pattern Error")
+    }
+}
+
 impl From<&str> for Error {
     fn from(_e: &str) -> Self {
         Error::new(_e)

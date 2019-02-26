@@ -7,10 +7,9 @@ use rexif::ExifData;
 use rusqlite::types::ToSql;
 use rusqlite::{blob::ZeroBlob, Connection, DatabaseName, Row, NO_PARAMS};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 mod error;
-pub use error::Error;
+pub use crate::error::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -44,11 +43,19 @@ pub struct Entry {
 impl Entry {
     fn from_entry(entry: fs::DirEntry) -> Result<Self> {
         let path = entry.path();
-        Ok(Entry {
+        Ok(Self {
             id: path.checksum()?,
             name: entry.file_name().into_string()?,
-            path: path,
+            path,
             created: DateTime::from(entry.metadata()?.created()?),
+        })
+    }
+    fn from_path(path: &PathBuf) -> Result<Self> {
+        Ok(Self {
+            id: path.checksum()?,
+            name: path.file_name()?.to_os_string().into_string()?,
+            path: path.to_path_buf(),
+            created: DateTime::from(path.metadata()?.created()?),
         })
     }
     pub fn save(self, conn: &Connection) -> Result<()> {
@@ -166,9 +173,9 @@ impl Dam {
 
     pub fn check_path<P: AsRef<Path>>(path: P) -> DamStatus {
         if db_path(&path.as_ref().to_path_buf()).exists() {
-            return DamStatus::Exists(Dam::init(&path).unwrap());
+            DamStatus::Exists(Dam::init(&path).unwrap())
         } else {
-            return DamStatus::Empty(path.as_ref().to_path_buf());
+            DamStatus::Empty(path.as_ref().to_path_buf())
         }
     }
 
@@ -201,20 +208,18 @@ impl Dam {
     }
     fn visit_dirs(&self, dir: &Path) -> Result<()> {
         if dir.is_dir() {
-            for entry in fs::read_dir(dir)?.filter(|s| match s {
-                Ok(s) => !s.file_name().into_string().unwrap().starts_with("."),
-                _ => false,
-            }) {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_file() {
-                    let mut info = Entry::from_entry(entry)?;
-                    &self.sort(&mut info)?;
-                    info.save(&self.connection)?;
-                }
-                if path.is_dir() {
-                    &self.visit_dirs(&path)?;
-                }
+            std::env::set_current_dir(dir)?;
+            for entry in glob::glob_with(
+                "**/*",
+                &glob::MatchOptions {
+                    case_sensitive: false,
+                    require_literal_separator: true,
+                    require_literal_leading_dot: true,
+                },
+            )? {
+                let mut info = Entry::from_path(&entry?)?;
+                self.sort(&mut info)?;
+                info.save(&self.connection)?;
             }
         }
         Ok(())

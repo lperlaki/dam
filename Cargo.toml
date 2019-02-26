@@ -17,4 +17,5 @@ rexif = "0.3.5"
 rusqlite = {version="0.16.0", features=["chrono", "blob", "backup"]}
 chrono = "0.4.6"
 open = "1.2.2"
-image="0.21.0"
+image = "0.21.0"
+glob = "0.2.11"
