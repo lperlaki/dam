@@ -1,15 +1,16 @@
-#![feature(try_trait, uniform_paths)]
+#![feature(try_trait)]
+
+mod entry;
+mod error;
 
 use checksum::crc::Crc;
-use chrono::{DateTime, Local};
-use image::{DynamicImage, GenericImageView};
+
+pub use crate::entry::{Entry, EntryId};
+pub use crate::error::Error;
 use rexif::ExifData;
-use rusqlite::types::ToSql;
-use rusqlite::{blob::ZeroBlob, Connection, DatabaseName, Row, NO_PARAMS};
+use rusqlite::{Connection, NO_PARAMS};
 use std::fs;
 use std::path::{Path, PathBuf};
-mod error;
-pub use crate::error::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -30,92 +31,7 @@ impl Information for Path {
     }
 }
 
-type EntryId = u32;
-
-#[derive(Debug)]
-pub struct Entry {
-    id: EntryId,
-    name: String,
-    path: PathBuf,
-    created: DateTime<Local>,
-}
-
-impl Entry {
-    fn from_entry(entry: fs::DirEntry) -> Result<Self> {
-        let path = entry.path();
-        Ok(Self {
-            id: path.checksum()?,
-            name: entry.file_name().into_string()?,
-            path,
-            created: DateTime::from(entry.metadata()?.created()?),
-        })
-    }
-    fn from_path(path: &PathBuf) -> Result<Self> {
-        Ok(Self {
-            id: path.checksum()?,
-            name: path.file_name()?.to_os_string().into_string()?,
-            path: path.to_path_buf(),
-            created: DateTime::from(path.metadata()?.created()?),
-        })
-    }
-    pub fn save(self, conn: &Connection) -> Result<()> {
-        // TODO: Check if File is thumbnail Compatible
-
-        let thumb = self.thumbnail()?;
-
-        let pix = thumb.raw_pixels();
-        conn.prepare_cached(
-            "INSERT INTO entry (id, name, path, created, thumbnail)
-                  VALUES (?1, ?2, ?3, ?4, ?5) 
-                  ON CONFLICT (id) 
-                  DO UPDATE SET name=?2, path=?3, created=?4",
-        )?
-        .execute(&[
-            &self.id,
-            &self.name as &ToSql,
-            &self.path.to_str() as &ToSql,
-            &self.created as &ToSql,
-            &ZeroBlob(pix.len() as i32), // TODO: Fix Size (to big)
-        ])?;
-        let mut blob = conn.blob_open(
-            DatabaseName::Main,
-            "entry",
-            "thumbnail",
-            conn.last_insert_rowid(),
-            false,
-        )?;
-        image::jpeg::JPEGEncoder::new(&mut blob)
-            .encode(&pix, thumb.width(), thumb.height(), thumb.color())
-            .map_err(Error::from)
-    }
-    pub fn load(row: &Row) -> Self {
-        Entry {
-            id: row.get(0),
-            name: row.get(1),
-            path: PathBuf::from(row.get::<usize, String>(2)),
-            created: row.get::<usize, DateTime<Local>>(3),
-        }
-    }
-    pub fn rename(&mut self, dest: &Path) -> Result<()> {
-        create_path(dest.parent()?)?;
-        fs::rename(&self.path, dest)?;
-        self.path = dest.to_path_buf();
-        Ok(())
-    }
-    pub fn open(&self) -> Result<std::process::ExitStatus> {
-        open::that(&self.path).map_err(Error::from)
-    }
-    pub fn find(conn: &Connection, name: &str) -> Result<Self> {
-        conn.prepare("SELECT id, name, path, created FROM entry WHERE name LIKE ?")?
-            .query_row(&[format!("%{}%", name)], |row| Entry::load(row))
-            .map_err(Error::from)
-    }
-    pub fn thumbnail(&self) -> Result<DynamicImage> {
-        Ok(image::open(&self.path)?.thumbnail(600, 400))
-    }
-}
-
-fn create_path(p: &Path) -> Result<()> {
+pub fn create_path(p: &Path) -> Result<()> {
     fs::create_dir_all(&p).map_err(Error::from)
 }
 
@@ -150,6 +66,19 @@ fn init_tables(conn: &Connection) -> Result<usize> {
 }
 
 #[derive(Debug)]
+struct Collection {
+    contains: Vec<CollectionEntry>,
+    path: PathBuf,
+    id: EntryId,
+}
+
+#[derive(Debug)]
+enum CollectionEntry {
+    Entry(Entry),
+    Collection(Collection),
+}
+
+#[derive(Debug)]
 pub enum DamStatus {
     Empty(PathBuf),
     Exists(Dam),
@@ -158,7 +87,7 @@ pub enum DamStatus {
 #[derive(Debug)]
 pub struct Dam {
     path: PathBuf,
-    connection: Connection,
+    db: Connection,
 }
 
 impl Dam {
@@ -167,13 +96,21 @@ impl Dam {
         init_tables(&conn)?;
         Ok(Dam {
             path: path.as_ref().to_path_buf(),
-            connection: conn,
+            db: conn,
+        })
+    }
+
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let conn = create_dir_db(&path.as_ref().to_path_buf())?;
+        Ok(Dam {
+            path: path.as_ref().to_path_buf(),
+            db: conn,
         })
     }
 
     pub fn check_path<P: AsRef<Path>>(path: P) -> DamStatus {
         if db_path(&path.as_ref().to_path_buf()).exists() {
-            DamStatus::Exists(Dam::init(&path).unwrap())
+            DamStatus::Exists(Dam::load(&path).unwrap())
         } else {
             DamStatus::Empty(path.as_ref().to_path_buf())
         }
@@ -185,17 +122,17 @@ impl Dam {
 
     pub fn list(&self) -> Result<()> {
         let mut stmt = self
-            .connection
+            .db
             .prepare("SELECT id, name, path, created FROM entry")?;
 
-        for entry in stmt.query_map(NO_PARAMS, |row| Entry::load(row))? {
+        for entry in stmt.query_map(NO_PARAMS, |row| Ok(Entry::load(row)))? {
             println!("{:?}", entry?);
         }
         Ok(())
     }
 
     pub fn open(&self, name: &str) -> Result<()> {
-        Entry::find(&self.connection, name)?.open()?;
+        Entry::find(&self.db, name)?.open()?;
         Ok(())
     }
 
@@ -211,7 +148,7 @@ impl Dam {
             std::env::set_current_dir(dir)?;
             for entry in glob::glob_with(
                 "**/*",
-                &glob::MatchOptions {
+                glob::MatchOptions {
                     case_sensitive: false,
                     require_literal_separator: true,
                     require_literal_leading_dot: true,
@@ -219,7 +156,7 @@ impl Dam {
             )? {
                 let mut info = Entry::from_path(&entry?)?;
                 self.sort(&mut info)?;
-                info.save(&self.connection)?;
+                info.save(&self.db)?;
             }
         }
         Ok(())
