@@ -14,7 +14,7 @@ checksum = "0.2.1"
 serde = { version = "1.0.101", features = ["derive"] }
 serde_json = "1.0.41"
 rexif = "0.3.6"
-rusqlite = { version = "0.20.0", features = ["chrono", "blob", "backup"] }
+rusqlite = { version = "0.23.0", features = ["chrono", "blob", "backup"] }
 chrono = "0.4.9"
 open = "1.3.2"
 image = "0.22.3"
